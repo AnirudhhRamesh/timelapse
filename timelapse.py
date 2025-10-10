@@ -18,13 +18,13 @@ import subprocess
 
 
 class TimelapseCapture:
-    def __init__(self, interval=30, quality='720p', output_dir=None):
+    def __init__(self, interval=30, quality='1080p', output_dir=None):
         """
         Initialize timelapse capture.
         
         Args:
             interval: Seconds between captures (default: 30)
-            quality: Video quality - '720p' or '1080p' (default: '720p')
+            quality: Video quality - '720p' or '1080p' (default: '1080p')
             output_dir: Optional output directory path
         """
         self.interval = interval
@@ -37,7 +37,7 @@ class TimelapseCapture:
             '720p': (1280, 720),
             '1080p': (1920, 1080)
         }
-        self.width, self.height = self.resolutions.get(quality, (1280, 720))
+        self.width, self.height = self.resolutions.get(quality, (1920, 1080))
         
         # Create output directory with timestamp
         if output_dir is None:
@@ -321,7 +321,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Start capturing with default settings (30s interval, 720p)
+  # Start capturing with default settings (30s interval, 1080p)
   python timelapse.py
   
   # Capture with custom interval and quality
@@ -345,8 +345,8 @@ Examples:
     parser.add_argument(
         '--quality',
         choices=['720p', '1080p'],
-        default='720p',
-        help='Video quality: 720p or 1080p (default: 720p)'
+        default='1080p',
+        help='Video quality: 720p or 1080p (default: 1080p)'
     )
     
     parser.add_argument(
