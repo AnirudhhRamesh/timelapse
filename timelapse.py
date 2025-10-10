@@ -76,6 +76,12 @@ class TimelapseCapture:
         
     def capture_frame(self):
         """Capture a single frame and save it with timestamp."""
+        # Flush the camera buffer to get the most recent frame
+        # This is critical when capturing at long intervals
+        for _ in range(5):
+            self.cap.read()
+        
+        # Now capture the actual frame we want
         ret, frame = self.cap.read()
         
         if not ret:
@@ -109,9 +115,18 @@ class TimelapseCapture:
         print(f"  Press Ctrl+C to stop and generate video\n")
         
         try:
+            next_capture_time = time.time()
+            
             while self.running:
-                self.capture_frame()
-                time.sleep(self.interval)
+                current_time = time.time()
+                
+                # If it's time to capture
+                if current_time >= next_capture_time:
+                    self.capture_frame()
+                    next_capture_time = current_time + self.interval
+                
+                # Sleep for a short time to avoid busy-waiting
+                time.sleep(0.1)
                 
         except KeyboardInterrupt:
             print("\n\nCapture interrupted by user")
