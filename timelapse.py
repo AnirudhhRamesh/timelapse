@@ -219,6 +219,14 @@ def add_timestamp_overlay(image_path, output_path):
         image_path: Path to input image
         output_path: Path to save output image with overlay
     """
+    def ordinal(n):
+        """Convert number to ordinal (1st, 2nd, 3rd, etc.)"""
+        if 10 <= n % 100 <= 20:
+            suffix = 'th'
+        else:
+            suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+        return f"{n}{suffix}"
+    
     # Extract timestamp from filename
     filename = Path(image_path).stem
     parts = filename.split('_')
@@ -230,50 +238,79 @@ def add_timestamp_overlay(image_path, output_path):
         # Parse the date and time
         date_obj = datetime.strptime(f"{date_str} {time_str}", '%Y-%m-%d %H-%M-%S')
         
-        # Format for overlay
-        day_line = date_obj.strftime('%a %b %d')  # e.g., "Fri Oct 10"
-        time_line = date_obj.strftime('%H:%M')     # e.g., "20:13"
+        # Format for overlay: "Wed Nov 5th, 0900"
+        day_name = date_obj.strftime('%a')  # e.g., "Wed"
+        month_name = date_obj.strftime('%b')  # e.g., "Nov"
+        day_num = date_obj.day
+        hour_min = date_obj.strftime('%H%M')  # e.g., "0900"
+        
+        top_line = f"{day_name} {month_name} {ordinal(day_num)}, {hour_min}"
+        bottom_line = "the great nov-jan lock-in"
     else:
-        day_line = "Unknown"
-        time_line = "00:00"
+        top_line = "Unknown"
+        bottom_line = "the great nov-jan lock-in"
     
     # Open image
     img = Image.open(image_path)
     draw = ImageDraw.Draw(img)
     
-    # Try to use a nice font, fall back to default if not available
+    # Try to use Helvetica Bold font (Starship-style font)
     try:
-        # Try common font locations on macOS
-        font_paths = [
-            '/System/Library/Fonts/Supplemental/Arial Bold.ttf',
+        # Try Helvetica Bold font locations on macOS
+        # For .ttc files, index 1 is usually Bold
+        helvetica_paths = [
             '/System/Library/Fonts/Helvetica.ttc',
+            '/System/Library/Fonts/Supplemental/Helvetica.ttc',
+            '/Library/Fonts/Helvetica.ttc',
+            '/System/Library/Fonts/Supplemental/Arial Bold.ttf',
+            '/Library/Fonts/Arial Bold.ttf',
             '/Library/Fonts/Arial.ttf',
         ]
-        font = None
-        for font_path in font_paths:
+        font_large = None
+        font_small = None
+        for font_path in helvetica_paths:
             if os.path.exists(font_path):
-                font = ImageFont.truetype(font_path, 40)
-                break
-        if font is None:
-            font = ImageFont.load_default()
+                try:
+                    # Try to load bold version first
+                    if font_path.endswith('.ttc'):
+                        # For .ttc files, try index 1 (Bold) first, then 0 (Regular)
+                        try:
+                            font_large = ImageFont.truetype(font_path, 50, index=1)
+                            font_small = ImageFont.truetype(font_path, 30, index=1)
+                            break
+                        except:
+                            try:
+                                font_large = ImageFont.truetype(font_path, 50, index=0)
+                                font_small = ImageFont.truetype(font_path, 30, index=0)
+                                break
+                            except:
+                                continue
+                    elif 'Bold' in font_path:
+                        # This is already a bold font file
+                        font_large = ImageFont.truetype(font_path, 50)
+                        font_small = ImageFont.truetype(font_path, 30)
+                        break
+                    else:
+                        # Try regular font
+                        font_large = ImageFont.truetype(font_path, 50)
+                        font_small = ImageFont.truetype(font_path, 30)
+                        break
+                except (OSError, IOError):
+                    continue
+        if font_large is None:
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
     except:
-        font = ImageFont.load_default()
+        font_large = ImageFont.load_default()
+        font_small = ImageFont.load_default()
     
-    # Position in top right corner
-    padding = 20
+    # Position in top left corner
+    padding_x = 20
+    padding_y = 20
     
-    # Draw text with black outline for better visibility
-    for offset_x in [-2, 0, 2]:
-        for offset_y in [-2, 0, 2]:
-            if offset_x != 0 or offset_y != 0:
-                draw.text((img.width - 200 + offset_x, padding + offset_y), 
-                         day_line, fill='black', font=font)
-                draw.text((img.width - 200 + offset_x, padding + 50 + offset_y), 
-                         time_line, fill='black', font=font)
-    
-    # Draw white text on top
-    draw.text((img.width - 200, padding), day_line, fill='white', font=font)
-    draw.text((img.width - 200, padding + 50), time_line, fill='white', font=font)
+    # Draw white text (no outline)
+    draw.text((padding_x, padding_y), top_line, fill='white', font=font_large)
+    draw.text((padding_x, padding_y + 60), bottom_line, fill='white', font=font_small)
     
     # Save image
     img.save(output_path, 'JPEG', quality=95)
@@ -384,7 +421,9 @@ def generate_video(images_dir, output_path, fps=30):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Timelapse capture and video generation for Logitech C925e',
+        description='Timelapse capture and video generation for Logitech C925e webcam.\n'
+                    'Captures frames at specified intervals and generates Twitter-compatible MP4 videos\n'
+                    'with timestamp overlays.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -392,17 +431,26 @@ Examples:
   # A preview window will appear first for you to adjust the camera view
   python timelapse.py
   
-  # Capture with custom interval and quality
+  # Capture with custom interval (60 seconds) and quality
   python timelapse.py --interval 60 --quality 1080p
   
-  # Skip the preview and start capturing immediately
+  # Capture at 720p with 30 second intervals
+  python timelapse.py --interval 30 --quality 720p
+  
+  # Skip the preview window and start capturing immediately
   python timelapse.py --skip-preview
+  
+  # Skip preview with custom settings
+  python timelapse.py --skip-preview --interval 10 --quality 720p
   
   # Generate video from existing capture folder
   python timelapse.py --generate-video captures/2025-10-10_14-30-00
   
-  # Generate video with custom FPS
+  # Generate video with custom FPS (60 frames per second)
   python timelapse.py --generate-video captures/2025-10-10_14-30-00 --fps 60
+  
+  # Generate video with 24 FPS (cinematic framerate)
+  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --fps 24
         """
     )
     
@@ -410,34 +458,44 @@ Examples:
         '--interval',
         type=int,
         default=15,
-        help='Seconds between captures (default: 15)'
+        metavar='SECONDS',
+        help='Time interval in seconds between frame captures (default: 15). '
+             'Smaller values create smoother timelapses but use more storage.'
     )
     
     parser.add_argument(
         '--quality',
         choices=['720p', '1080p'],
         default='1080p',
-        help='Video quality: 720p or 1080p (default: 1080p)'
+        metavar='RESOLUTION',
+        help='Video resolution quality: 720p (1280x720) or 1080p (1920x1080). '
+             'Higher quality uses more storage but produces better video (default: 1080p).'
     )
     
     parser.add_argument(
         '--generate-video',
         type=str,
         metavar='FOLDER',
-        help='Generate video from existing capture folder (skips capture)'
+        help='Generate video from an existing capture folder. '
+             'This skips the capture phase and goes directly to video generation. '
+             'Provide the path to the capture folder (e.g., captures/2025-10-10_14-30-00).'
     )
     
     parser.add_argument(
         '--fps',
         type=int,
         default=30,
-        help='Frames per second for output video (default: 30)'
+        metavar='FRAMES',
+        help='Frames per second for the output video (default: 30). '
+             'Common values: 24 (cinematic), 30 (standard), 60 (smooth). '
+             'Higher FPS creates smoother playback but larger file sizes.'
     )
     
     parser.add_argument(
         '--skip-preview',
         action='store_true',
-        help='Skip the camera preview and start capturing immediately'
+        help='Skip the camera preview window and start capturing immediately. '
+             'Useful for automated or scripted captures where manual adjustment is not needed.'
     )
     
     args = parser.parse_args()
