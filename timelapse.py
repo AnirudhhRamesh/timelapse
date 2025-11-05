@@ -18,7 +18,7 @@ import subprocess
 
 
 class TimelapseCapture:
-    def __init__(self, interval=30, quality='1080p', output_dir=None):
+    def __init__(self, interval=15, quality='1080p', output_dir=None):
         """
         Initialize timelapse capture.
         
@@ -73,6 +73,55 @@ class TimelapseCapture:
         # Warm up the camera
         for _ in range(5):
             self.cap.read()
+    
+    def preview_camera(self):
+        """
+        Show live camera preview window and wait for user confirmation.
+        User presses 'q' in preview window to proceed, or 'ESC' to exit.
+        """
+        print("\n" + "="*60)
+        print("Camera Preview - Adjust your view")
+        print("="*60)
+        print("Press 'q' in the preview window to start timelapse")
+        print("Press 'ESC' in the preview window to exit\n")
+        
+        window_name = "Timelapse Preview - Press 'q' to start or ESC to exit"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        
+        try:
+            while True:
+                ret, frame = self.cap.read()
+                
+                if not ret:
+                    print("Failed to read from camera during preview")
+                    break
+                
+                # Add text overlay to preview
+                cv2.putText(frame, "Press 'q' to start or ESC to exit", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Display the frame
+                cv2.imshow(window_name, frame)
+                
+                # Check for key press (non-blocking, 30ms delay for smooth preview)
+                key = cv2.waitKey(30) & 0xFF
+                
+                if key == ord('q'):
+                    print("\nPreview confirmed - starting timelapse...")
+                    break
+                elif key == 27:  # ESC key
+                    print("\nPreview cancelled")
+                    return False
+                    
+        except KeyboardInterrupt:
+            print("\nPreview interrupted")
+            return False
+        finally:
+            # Make sure to close the window properly
+            cv2.destroyWindow(window_name)
+            cv2.waitKey(1)  # Give OpenCV time to process the window destruction
+        
+        return True
         
     def capture_frame(self):
         """Capture a single frame and save it with timestamp."""
@@ -104,9 +153,17 @@ class TimelapseCapture:
         
         return filepath, now
         
-    def start_capture(self):
+    def start_capture(self, skip_preview=False):
         """Start the timelapse capture loop."""
         self.setup_camera()
+        
+        # Show preview and wait for confirmation (unless skipped)
+        if not skip_preview:
+            if not self.preview_camera():
+                print("Timelapse cancelled by user")
+                self.cleanup()
+                return
+        
         self.running = True
         
         print(f"\nStarting timelapse capture:")
@@ -123,10 +180,20 @@ class TimelapseCapture:
                 # If it's time to capture
                 if current_time >= next_capture_time:
                     self.capture_frame()
+                    # Set next capture time based on when we actually finished capturing
+                    current_time = time.time()
                     next_capture_time = current_time + self.interval
                 
-                # Sleep for a short time to avoid busy-waiting
-                time.sleep(0.1)
+                # Calculate how long to sleep until next capture
+                sleep_duration = next_capture_time - time.time()
+                
+                # Sleep for the calculated duration, but don't sleep if we're already past due
+                # Also cap at interval to handle edge cases
+                if sleep_duration > 0:
+                    time.sleep(min(sleep_duration, self.interval))
+                else:
+                    # If we're already past due (shouldn't happen, but handle gracefully)
+                    time.sleep(0.1)
                 
         except KeyboardInterrupt:
             print("\n\nCapture interrupted by user")
@@ -321,11 +388,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Start capturing with default settings (30s interval, 1080p)
+  # Start capturing with default settings (15s interval, 1080p)
+  # A preview window will appear first for you to adjust the camera view
   python timelapse.py
   
   # Capture with custom interval and quality
   python timelapse.py --interval 60 --quality 1080p
+  
+  # Skip the preview and start capturing immediately
+  python timelapse.py --skip-preview
   
   # Generate video from existing capture folder
   python timelapse.py --generate-video captures/2025-10-10_14-30-00
@@ -338,8 +409,8 @@ Examples:
     parser.add_argument(
         '--interval',
         type=int,
-        default=30,
-        help='Seconds between captures (default: 30)'
+        default=15,
+        help='Seconds between captures (default: 15)'
     )
     
     parser.add_argument(
@@ -361,6 +432,12 @@ Examples:
         type=int,
         default=30,
         help='Frames per second for output video (default: 30)'
+    )
+    
+    parser.add_argument(
+        '--skip-preview',
+        action='store_true',
+        help='Skip the camera preview and start capturing immediately'
     )
     
     args = parser.parse_args()
@@ -398,7 +475,7 @@ Examples:
     
     try:
         # Start capturing
-        timelapse.start_capture()
+        timelapse.start_capture(skip_preview=args.skip_preview)
         
         # After capture is done, generate video
         if timelapse.frames_captured > 0:
@@ -426,4 +503,3 @@ Examples:
 
 if __name__ == '__main__':
     main()
-
