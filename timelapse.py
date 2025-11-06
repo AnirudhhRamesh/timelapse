@@ -238,11 +238,11 @@ def add_timestamp_overlay(image_path, output_path):
         # Parse the date and time
         date_obj = datetime.strptime(f"{date_str} {time_str}", '%Y-%m-%d %H-%M-%S')
         
-        # Format for overlay: "Wed Nov 5th, 0900"
+        # Format for overlay: "Wed Nov 5th, 09:00"
         day_name = date_obj.strftime('%a')  # e.g., "Wed"
         month_name = date_obj.strftime('%b')  # e.g., "Nov"
         day_num = date_obj.day
-        hour_min = date_obj.strftime('%H%M')  # e.g., "0900"
+        hour_min = date_obj.strftime('%H:%M')  # e.g., "09:00"
         
         top_line = f"{day_name} {month_name} {ordinal(day_num)}, {hour_min}"
         bottom_line = "the great nov-jan lock-in"
@@ -304,13 +304,40 @@ def add_timestamp_overlay(image_path, output_path):
         font_large = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
-    # Position in top left corner
-    padding_x = 20
-    padding_y = 20
+    # Position in bottom right corner
+    padding_x = 20  # Padding from right edge
+    padding_y_bottom = 20  # Padding from bottom
     
-    # Draw white text (no outline)
-    draw.text((padding_x, padding_y), top_line, fill='white', font=font_large)
-    draw.text((padding_x, padding_y + 60), bottom_line, fill='white', font=font_small)
+    # Get image dimensions
+    img_width, img_height = img.size
+    
+    # Calculate text bounding boxes to position from bottom and right
+    # Get bounding box for the large text (top line)
+    bbox_large = draw.textbbox((0, 0), top_line, font=font_large)
+    text_width_large = bbox_large[2] - bbox_large[0]
+    text_height_large = bbox_large[3] - bbox_large[1]
+    
+    # Get bounding box for the small text (bottom line)
+    bbox_small = draw.textbbox((0, 0), bottom_line, font=font_small)
+    text_width_small = bbox_small[2] - bbox_small[0]
+    text_height_small = bbox_small[3] - bbox_small[1]
+    
+    # Calculate spacing between lines (reduced for tighter spacing)
+    line_spacing = 10
+    
+    # Position from bottom: y coordinate for bottom line (small text)
+    y_bottom_line = img_height - padding_y_bottom - text_height_small
+    
+    # Position for top line (large text) - directly above bottom line
+    y_top_line = y_bottom_line - line_spacing - text_height_large
+    
+    # Position from right: x coordinates for right-aligned text
+    x_top_line = img_width - padding_x - text_width_large
+    x_bottom_line = img_width - padding_x - text_width_small
+    
+    # Draw white text (no outline) - right-aligned
+    draw.text((x_top_line, y_top_line), top_line, fill='white', font=font_large)
+    draw.text((x_bottom_line, y_bottom_line), bottom_line, fill='white', font=font_small)
     
     # Save image
     img.save(output_path, 'JPEG', quality=95)
