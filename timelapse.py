@@ -15,6 +15,12 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import subprocess
+import tempfile
+import shutil
+
+# Import YoutubeDownloader
+sys.path.insert(0, str(Path(__file__).parent / 'YouTubeDownloader'))
+from youtube_downloader import YoutubeDownloader
 
 
 class TimelapseCapture:
@@ -211,6 +217,63 @@ class TimelapseCapture:
         self.running = False
 
 
+def add_film_grain_effect(image_path, output_path, grain_intensity=0.15, blur_radius=1.5):
+    """
+    Add film grain and filter effects to an image to create a vintage look
+    and reduce text clarity.
+    
+    Args:
+        image_path: Path to input image
+        output_path: Path to save output image with effects
+        grain_intensity: Intensity of film grain (0.0-1.0, default: 0.15)
+        blur_radius: Blur radius to reduce text clarity (default: 1.5)
+    """
+    # Open image
+    img = Image.open(image_path)
+    img_array = np.array(img)
+    
+    # Convert to float for processing
+    img_float = img_array.astype(np.float32) / 255.0
+    
+    # Apply slight blur to reduce text clarity
+    if blur_radius > 0:
+        # Convert PIL to OpenCV format (RGB to BGR)
+        img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        # Apply Gaussian blur
+        img_cv = cv2.GaussianBlur(img_cv, (0, 0), blur_radius)
+        # Convert back to RGB
+        img_array = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+        img_float = img_array.astype(np.float32) / 255.0
+    
+    # Add film grain noise
+    if grain_intensity > 0:
+        # Generate random noise
+        noise = np.random.normal(0, grain_intensity, img_float.shape).astype(np.float32)
+        # Add noise to image
+        img_float = img_float + noise
+        # Clip values to valid range
+        img_float = np.clip(img_float, 0, 1)
+    
+    # Apply subtle color grading for vintage look
+    # Slight desaturation and warm tone
+    # Convert to HSV for color manipulation (using BGR since we're working with OpenCV)
+    img_bgr = cv2.cvtColor((img_float * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+    img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    # Slightly desaturate (reduce saturation by 10%)
+    img_hsv[:, :, 1] = img_hsv[:, :, 1] * 0.9
+    # Slight warm tone shift (increase hue slightly for warmer look)
+    img_hsv[:, :, 0] = np.clip(img_hsv[:, :, 0] + 5, 0, 179)  # OpenCV uses 0-179 for hue
+    # Convert back to BGR then RGB
+    img_bgr_processed = cv2.cvtColor(img_hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    img_processed = cv2.cvtColor(img_bgr_processed, cv2.COLOR_BGR2RGB)
+    
+    # Convert back to PIL Image
+    img_final = Image.fromarray(img_processed)
+    
+    # Save with slightly reduced quality to further reduce clarity
+    img_final.save(output_path, 'JPEG', quality=85)
+
+
 def add_timestamp_overlay(image_path, output_path):
     """
     Add timestamp overlay to an image.
@@ -343,14 +406,16 @@ def add_timestamp_overlay(image_path, output_path):
     img.save(output_path, 'JPEG', quality=95)
 
 
-def generate_video(images_dir, output_path, fps=30):
+def generate_video(images_dir, output_path, fps=24, apply_film_grain=True, audio_file=None):
     """
     Generate a Twitter-compatible MP4 video from captured images with overlays.
     
     Args:
         images_dir: Directory containing the captured images
         output_path: Path for the output video file
-        fps: Frames per second for the output video (default: 30)
+        fps: Frames per second for the output video (default: 24)
+        apply_film_grain: Apply film grain and filter effects (default: True)
+        audio_file: Optional path to audio file to combine with video (default: None)
     """
     images_dir = Path(images_dir)
     output_path = Path(output_path)
@@ -364,20 +429,34 @@ def generate_video(images_dir, output_path, fps=30):
     
     print(f"\nGenerating video from {len(image_files)} frames...")
     
-    # Create temporary directory for overlay images
+    # Create temporary directory for processed images
     temp_dir = images_dir.parent / 'temp_overlay'
     temp_dir.mkdir(exist_ok=True)
     
     print("Adding timestamp overlays to frames...")
     overlay_files = []
     for i, img_file in enumerate(image_files):
-        output_file = temp_dir / f"overlay_{i:06d}.jpg"
-        add_timestamp_overlay(img_file, output_file)
+        # First add timestamp overlay
+        overlay_temp = temp_dir / f"overlay_temp_{i:06d}.jpg"
+        add_timestamp_overlay(img_file, overlay_temp)
+        
+        # Then apply film grain effect if enabled
+        if apply_film_grain:
+            output_file = temp_dir / f"overlay_{i:06d}.jpg"
+            add_film_grain_effect(overlay_temp, output_file)
+            # Remove temporary overlay file
+            overlay_temp.unlink()
+        else:
+            output_file = overlay_temp
+        
         overlay_files.append(output_file)
         if (i + 1) % 10 == 0:
             print(f"  Processed {i + 1}/{len(image_files)} frames")
     
-    print(f"All frames processed with overlays")
+    if apply_film_grain:
+        print(f"All frames processed with overlays and film grain effects")
+    else:
+        print(f"All frames processed with overlays")
     
     # Create video using FFmpeg with Twitter-compatible settings
     print(f"Creating MP4 video at {fps} FPS...")
@@ -393,25 +472,41 @@ def generate_video(images_dir, output_path, fps=30):
     
     # FFmpeg command for Twitter-compatible video
     # H.264 video codec, AAC audio codec, yuv420p pixel format
+    # Reduced quality settings to obscure screen text/details
     ffmpeg_cmd = [
         'ffmpeg',
         '-y',  # Overwrite output file
         '-f', 'concat',
         '-safe', '0',
         '-i', str(list_file),
-        '-f', 'lavfi',
-        '-i', 'anullsrc=r=44100:cl=stereo',  # Generate silent audio track
+    ]
+    
+    # Add audio input (YouTube audio or silent track)
+    if audio_file and Path(audio_file).exists():
+        print(f"Using audio from: {audio_file}")
+        ffmpeg_cmd.extend(['-i', str(audio_file)])
+    else:
+        ffmpeg_cmd.extend(['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo'])  # Generate silent audio track
+    
+    # Add video filter for additional blur if film grain is enabled
+    if apply_film_grain:
+        ffmpeg_cmd.extend(['-vf', 'gblur=sigma=0.8'])
+    
+    # Continue with encoding settings
+    ffmpeg_cmd.extend([
         '-c:v', 'libx264',  # H.264 codec
         '-profile:v', 'high',  # High profile for better quality
         '-level', '4.0',
         '-pix_fmt', 'yuv420p',  # Twitter-compatible pixel format
+        '-crf', '23' if apply_film_grain else '18',  # Higher CRF = lower quality (23 is good balance, 18 is higher quality)
+        '-preset', 'medium',  # Encoding preset
         '-c:a', 'aac',  # AAC audio codec
         '-b:a', '128k',  # Audio bitrate
         '-shortest',  # Match audio length to video length
         '-movflags', '+faststart',  # Enable streaming
         '-r', str(fps),  # Set frame rate
         str(output_path)
-    ]
+    ])
     
     try:
         result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
@@ -476,8 +571,14 @@ Examples:
   # Generate video with custom FPS (60 frames per second)
   python timelapse.py --generate-video captures/2025-10-10_14-30-00 --fps 60
   
-  # Generate video with 24 FPS (cinematic framerate)
-  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --fps 24
+  # Generate video with 30 FPS (standard framerate)
+  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --fps 30
+  
+  # Generate video with YouTube audio
+  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --youtube-audio "https://youtube.com/watch?v=..."
+  
+  # Generate video with YouTube audio and custom FPS
+  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --youtube-audio "https://youtube.com/watch?v=..." --fps 30
         """
     )
     
@@ -511,11 +612,19 @@ Examples:
     parser.add_argument(
         '--fps',
         type=int,
-        default=30,
+        default=24,
         metavar='FRAMES',
-        help='Frames per second for the output video (default: 30). '
+        help='Frames per second for the output video (default: 24). '
              'Common values: 24 (cinematic), 30 (standard), 60 (smooth). '
              'Higher FPS creates smoother playback but larger file sizes.'
+    )
+    
+    parser.add_argument(
+        '--youtube-audio',
+        type=str,
+        metavar='URL',
+        help='Optional YouTube video URL to download audio from and combine with the generated video. '
+             'The audio will be downloaded and merged with the timelapse video.'
     )
     
     parser.add_argument(
@@ -523,6 +632,13 @@ Examples:
         action='store_true',
         help='Skip the camera preview window and start capturing immediately. '
              'Useful for automated or scripted captures where manual adjustment is not needed.'
+    )
+    
+    parser.add_argument(
+        '--no-film-grain',
+        action='store_true',
+        help='Disable film grain and filter effects. By default, these effects are enabled '
+             'to create a vintage look and reduce text clarity in the video.'
     )
     
     args = parser.parse_args()
@@ -541,7 +657,51 @@ Examples:
             sys.exit(1)
         
         output_video = capture_dir / 'timelapse.mp4'
-        success = generate_video(images_dir, output_video, fps=args.fps)
+        apply_film_grain = not args.no_film_grain
+        
+        # Download YouTube audio if specified
+        audio_file = None
+        temp_audio_path = None
+        if args.youtube_audio:
+            print("\n" + "="*60)
+            print("Downloading YouTube audio...")
+            print("="*60)
+            try:
+                downloader = YoutubeDownloader()
+                # Create temporary file for audio
+                temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                temp_audio_path = temp_audio.name
+                temp_audio.close()
+                audio_file = downloader.download_audio(args.youtube_audio, temp_audio_path)
+                if not audio_file:
+                    print("Warning: Failed to download YouTube audio. Proceeding without audio.")
+                    audio_file = None
+                    # Clean up temp file if download failed
+                    if temp_audio_path and Path(temp_audio_path).exists():
+                        try:
+                            os.unlink(temp_audio_path)
+                        except:
+                            pass
+            except Exception as e:
+                print(f"Warning: Error downloading YouTube audio: {e}")
+                print("Proceeding without audio.")
+                audio_file = None
+                # Clean up temp file if exception occurred
+                if temp_audio_path and Path(temp_audio_path).exists():
+                    try:
+                        os.unlink(temp_audio_path)
+                    except:
+                        pass
+        
+        success = generate_video(images_dir, output_video, fps=args.fps, apply_film_grain=apply_film_grain, audio_file=audio_file)
+        
+        # Clean up temporary audio file if it was created
+        cleanup_path = audio_file if audio_file else temp_audio_path
+        if cleanup_path and Path(cleanup_path).exists():
+            try:
+                os.unlink(cleanup_path)
+            except:
+                pass
         
         sys.exit(0 if success else 1)
     
@@ -569,7 +729,51 @@ Examples:
             print("="*60)
             
             output_video = timelapse.output_dir / 'timelapse.mp4'
-            success = generate_video(timelapse.images_dir, output_video, fps=args.fps)
+            apply_film_grain = not args.no_film_grain
+            
+            # Download YouTube audio if specified
+            audio_file = None
+            temp_audio_path = None
+            if args.youtube_audio:
+                print("\n" + "="*60)
+                print("Downloading YouTube audio...")
+                print("="*60)
+                try:
+                    downloader = YoutubeDownloader()
+                    # Create temporary file for audio
+                    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                    temp_audio_path = temp_audio.name
+                    temp_audio.close()
+                    audio_file = downloader.download_audio(args.youtube_audio, temp_audio_path)
+                    if not audio_file:
+                        print("Warning: Failed to download YouTube audio. Proceeding without audio.")
+                        audio_file = None
+                        # Clean up temp file if download failed
+                        if temp_audio_path and Path(temp_audio_path).exists():
+                            try:
+                                os.unlink(temp_audio_path)
+                            except:
+                                pass
+                except Exception as e:
+                    print(f"Warning: Error downloading YouTube audio: {e}")
+                    print("Proceeding without audio.")
+                    audio_file = None
+                    # Clean up temp file if exception occurred
+                    if temp_audio_path and Path(temp_audio_path).exists():
+                        try:
+                            os.unlink(temp_audio_path)
+                        except:
+                            pass
+            
+            success = generate_video(timelapse.images_dir, output_video, fps=args.fps, apply_film_grain=apply_film_grain, audio_file=audio_file)
+            
+            # Clean up temporary audio file if it was created
+            cleanup_path = audio_file if audio_file else temp_audio_path
+            if cleanup_path and Path(cleanup_path).exists():
+                try:
+                    os.unlink(cleanup_path)
+                except:
+                    pass
             
             if success:
                 print("\n" + "="*60)
