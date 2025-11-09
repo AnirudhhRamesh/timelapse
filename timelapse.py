@@ -406,31 +406,107 @@ def add_timestamp_overlay(image_path, output_path):
     img.save(output_path, 'JPEG', quality=95)
 
 
-def generate_video(images_dir, output_path, fps=24, apply_film_grain=True, audio_file=None):
+def find_capture_dirs_for_date(date_str, captures_root='captures'):
+    """
+    Find all capture directories for a given date.
+    
+    Args:
+        date_str: Date string in format 'YYYY-MM-DD'
+        captures_root: Root directory containing capture folders (default: 'captures')
+    
+    Returns:
+        List of Path objects for capture directories matching the date
+    """
+    captures_root = Path(captures_root)
+    if not captures_root.exists():
+        return []
+    
+    # Find all directories that start with the date
+    matching_dirs = []
+    for item in captures_root.iterdir():
+        if item.is_dir() and item.name.startswith(date_str):
+            images_dir = item / 'images'
+            if images_dir.exists():
+                matching_dirs.append(item)
+    
+    return sorted(matching_dirs)
+
+
+def collect_frames_from_dirs(capture_dirs):
+    """
+    Collect all frames from multiple capture directories and sort them chronologically.
+    
+    Args:
+        capture_dirs: List of Path objects for capture directories
+    
+    Returns:
+        List of Path objects for image files, sorted chronologically by timestamp
+    """
+    all_frames = []
+    
+    for capture_dir in capture_dirs:
+        images_dir = capture_dir / 'images'
+        frames = list(images_dir.glob('frame_*.jpg'))
+        all_frames.extend(frames)
+    
+    # Sort frames by timestamp extracted from filename
+    def extract_timestamp(frame_path):
+        """Extract timestamp from frame filename for sorting."""
+        filename = frame_path.stem  # Get filename without extension
+        parts = filename.split('_')
+        if len(parts) >= 4:
+            # Format: frame_000254_2025-11-05_10-43-05
+            date_str = parts[2]  # YYYY-MM-DD
+            time_str = parts[3]   # HH-MM-SS
+            try:
+                return datetime.strptime(f"{date_str} {time_str}", '%Y-%m-%d %H-%M-%S')
+            except ValueError:
+                # Fallback to filename sorting if parsing fails
+                return datetime.min
+        # Fallback to filename sorting
+        return datetime.min
+    
+    # Sort by timestamp, then by frame number as tiebreaker
+    all_frames.sort(key=lambda p: (extract_timestamp(p), p.name))
+    
+    return all_frames
+
+
+def generate_video(images_dir_or_files, output_path, fps=24, apply_film_grain=True, audio_file=None):
     """
     Generate a Twitter-compatible MP4 video from captured images with overlays.
     
     Args:
-        images_dir: Directory containing the captured images
+        images_dir_or_files: Either a directory Path containing images, or a list of image file Paths
         output_path: Path for the output video file
         fps: Frames per second for the output video (default: 24)
         apply_film_grain: Apply film grain and filter effects (default: True)
         audio_file: Optional path to audio file to combine with video (default: None)
     """
-    images_dir = Path(images_dir)
     output_path = Path(output_path)
     
-    # Get all image files sorted by filename
-    image_files = sorted(images_dir.glob('frame_*.jpg'))
+    # Handle both directory and list of files
+    if isinstance(images_dir_or_files, (list, tuple)):
+        # List of image files provided
+        image_files = [Path(f) for f in images_dir_or_files]
+        # Use parent of first image for temp directory
+        temp_dir = image_files[0].parent.parent / 'temp_overlay' if image_files else Path('temp_overlay')
+    else:
+        # Directory provided
+        images_dir = Path(images_dir_or_files)
+        image_files = sorted(images_dir.glob('frame_*.jpg'))
+        temp_dir = images_dir.parent / 'temp_overlay'
     
     if not image_files:
-        print(f"No images found in {images_dir}")
+        if isinstance(images_dir_or_files, (list, tuple)):
+            print(f"No images provided in file list")
+        else:
+            print(f"No images found in {images_dir_or_files}")
         return False
     
     print(f"\nGenerating video from {len(image_files)} frames...")
     
     # Create temporary directory for processed images
-    temp_dir = images_dir.parent / 'temp_overlay'
     temp_dir.mkdir(exist_ok=True)
     
     print("Adding timestamp overlays to frames...")
@@ -579,6 +655,12 @@ Examples:
   
   # Generate video with YouTube audio and custom FPS
   python timelapse.py --generate-video captures/2025-10-10_14-30-00 --youtube-audio "https://youtube.com/watch?v=..." --fps 30
+  
+  # Merge all recordings from the same day
+  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --merge
+  
+  # Merge recordings with YouTube audio
+  python timelapse.py --generate-video captures/2025-10-10_14-30-00 --merge --youtube-audio "https://youtube.com/watch?v=..."
         """
     )
     
@@ -628,6 +710,14 @@ Examples:
     )
     
     parser.add_argument(
+        '--merge',
+        action='store_true',
+        help='Merge all recordings from the same day as the specified folder. '
+             'Finds all capture folders with the same date (YYYY-MM-DD) and combines them '
+             'into a single video in chronological order. Use with --generate-video.'
+    )
+    
+    parser.add_argument(
         '--skip-preview',
         action='store_true',
         help='Skip the camera preview window and start capturing immediately. '
@@ -651,13 +741,52 @@ Examples:
             print(f"Error: Directory not found: {capture_dir}")
             sys.exit(1)
         
-        images_dir = capture_dir / 'images'
-        if not images_dir.exists():
-            print(f"Error: Images directory not found: {images_dir}")
-            sys.exit(1)
-        
-        output_video = capture_dir / 'timelapse.mp4'
         apply_film_grain = not args.no_film_grain
+        
+        # Handle merge mode
+        if args.merge:
+            # Extract date from the capture directory name (format: YYYY-MM-DD_HH-MM-SS)
+            dir_name = capture_dir.name
+            date_str = dir_name.split('_')[0]  # Get YYYY-MM-DD part
+            
+            print("\n" + "="*60)
+            print(f"Merging all recordings from {date_str}")
+            print("="*60)
+            
+            # Find all capture directories for this date
+            captures_root = capture_dir.parent
+            matching_dirs = find_capture_dirs_for_date(date_str, captures_root)
+            
+            if not matching_dirs:
+                print(f"Error: No capture directories found for date {date_str}")
+                sys.exit(1)
+            
+            print(f"Found {len(matching_dirs)} recording(s) for {date_str}:")
+            for dir_path in matching_dirs:
+                images_dir = dir_path / 'images'
+                frame_count = len(list(images_dir.glob('frame_*.jpg')))
+                print(f"  - {dir_path.name}: {frame_count} frames")
+            
+            # Collect and sort all frames chronologically
+            all_frames = collect_frames_from_dirs(matching_dirs)
+            print(f"\nTotal frames to merge: {len(all_frames)}")
+            
+            if not all_frames:
+                print("Error: No frames found in any of the directories")
+                sys.exit(1)
+            
+            # Use the first capture directory for output location
+            output_video = capture_dir / 'timelapse_merged.mp4'
+            images_input = all_frames
+        else:
+            # Single directory mode
+            images_dir = capture_dir / 'images'
+            if not images_dir.exists():
+                print(f"Error: Images directory not found: {images_dir}")
+                sys.exit(1)
+            
+            output_video = capture_dir / 'timelapse.mp4'
+            images_input = images_dir
         
         # Download YouTube audio if specified
         audio_file = None
@@ -693,7 +822,7 @@ Examples:
                     except:
                         pass
         
-        success = generate_video(images_dir, output_video, fps=args.fps, apply_film_grain=apply_film_grain, audio_file=audio_file)
+        success = generate_video(images_input, output_video, fps=args.fps, apply_film_grain=apply_film_grain, audio_file=audio_file)
         
         # Clean up temporary audio file if it was created
         cleanup_path = audio_file if audio_file else temp_audio_path
