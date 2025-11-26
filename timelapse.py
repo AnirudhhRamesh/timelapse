@@ -667,7 +667,7 @@ Examples:
     parser.add_argument(
         '--interval',
         type=int,
-        default=15,
+        default=30,
         metavar='SECONDS',
         help='Time interval in seconds between frame captures (default: 15). '
              'Smaller values create smoother timelapses but use more storage.'
@@ -850,70 +850,6 @@ Examples:
     try:
         # Start capturing
         timelapse.start_capture(skip_preview=args.skip_preview)
-        
-        # After capture is done, generate video
-        if timelapse.frames_captured > 0:
-            print("\n" + "="*60)
-            print("Generating video...")
-            print("="*60)
-            
-            output_video = timelapse.output_dir / 'timelapse.mp4'
-            apply_film_grain = not args.no_film_grain
-            
-            # Download YouTube audio if specified
-            audio_file = None
-            temp_audio_path = None
-            if args.youtube_audio:
-                print("\n" + "="*60)
-                print("Downloading YouTube audio...")
-                print("="*60)
-                try:
-                    downloader = YoutubeDownloader()
-                    # Create temporary file for audio
-                    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                    temp_audio_path = temp_audio.name
-                    temp_audio.close()
-                    audio_file = downloader.download_audio(args.youtube_audio, temp_audio_path)
-                    if not audio_file:
-                        print("Warning: Failed to download YouTube audio. Proceeding without audio.")
-                        audio_file = None
-                        # Clean up temp file if download failed
-                        if temp_audio_path and Path(temp_audio_path).exists():
-                            try:
-                                os.unlink(temp_audio_path)
-                            except:
-                                pass
-                except Exception as e:
-                    print(f"Warning: Error downloading YouTube audio: {e}")
-                    print("Proceeding without audio.")
-                    audio_file = None
-                    # Clean up temp file if exception occurred
-                    if temp_audio_path and Path(temp_audio_path).exists():
-                        try:
-                            os.unlink(temp_audio_path)
-                        except:
-                            pass
-            
-            success = generate_video(timelapse.images_dir, output_video, fps=args.fps, apply_film_grain=apply_film_grain, audio_file=audio_file)
-            
-            # Clean up temporary audio file if it was created
-            cleanup_path = audio_file if audio_file else temp_audio_path
-            if cleanup_path and Path(cleanup_path).exists():
-                try:
-                    os.unlink(cleanup_path)
-                except:
-                    pass
-            
-            if success:
-                print("\n" + "="*60)
-                print("Timelapse complete!")
-                print("="*60)
-            else:
-                print("\nVideo generation failed. You can try again with:")
-                print(f"  python timelapse.py --generate-video {timelapse.output_dir}")
-        else:
-            print("\nNo frames captured.")
-            
     except Exception as e:
         print(f"\nError: {e}")
         sys.exit(1)
