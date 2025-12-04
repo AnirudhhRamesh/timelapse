@@ -18,9 +18,70 @@ import subprocess
 import tempfile
 import shutil
 
-# Import YoutubeDownloader
-sys.path.insert(0, str(Path(__file__).parent / 'YouTubeDownloader'))
-from youtube_downloader import YoutubeDownloader
+
+def download_youtube_audio(url, output_path):
+    """
+    Download audio from a YouTube video using yt-dlp.
+    
+    Args:
+        url: YouTube video URL
+        output_path: Path to save the audio file (will be converted to mp3)
+    
+    Returns:
+        Path to the downloaded audio file, or None if download failed
+    """
+    try:
+        # Use yt-dlp to download audio only
+        # -x: Extract audio
+        # --audio-format mp3: Convert to mp3
+        # --audio-quality 0: Best quality
+        # -o: Output template
+        cmd = [
+            'yt-dlp',
+            '-x',
+            '--audio-format', 'mp3',
+            '--audio-quality', '0',
+            '-o', str(output_path),
+            '--no-playlist',
+            '--quiet',
+            '--no-warnings',
+            url
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"yt-dlp error: {result.stderr}")
+            return None
+        
+        # yt-dlp may add .mp3 extension if not present
+        output_path_obj = Path(output_path)
+        if output_path_obj.exists():
+            return str(output_path_obj)
+        
+        # Check if file was saved with .mp3 extension added
+        mp3_path = Path(str(output_path) + '.mp3')
+        if mp3_path.exists():
+            return str(mp3_path)
+        
+        # Check without extension (yt-dlp might have stripped it)
+        base_path = output_path_obj.with_suffix('')
+        for ext in ['.mp3', '.m4a', '.webm', '.opus']:
+            check_path = base_path.with_suffix(ext)
+            if check_path.exists():
+                return str(check_path)
+        
+        print("Warning: Audio file not found after download")
+        return None
+        
+    except FileNotFoundError:
+        print("\nError: yt-dlp not found. Please install it:")
+        print("  pip install yt-dlp")
+        print("  or: brew install yt-dlp")
+        return None
+    except Exception as e:
+        print(f"Error downloading YouTube audio: {e}")
+        return None
 
 
 class TimelapseCapture:
@@ -796,12 +857,11 @@ Examples:
             print("Downloading YouTube audio...")
             print("="*60)
             try:
-                downloader = YoutubeDownloader()
                 # Create temporary file for audio
                 temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
                 temp_audio_path = temp_audio.name
                 temp_audio.close()
-                audio_file = downloader.download_audio(args.youtube_audio, temp_audio_path)
+                audio_file = download_youtube_audio(args.youtube_audio, temp_audio_path)
                 if not audio_file:
                     print("Warning: Failed to download YouTube audio. Proceeding without audio.")
                     audio_file = None
