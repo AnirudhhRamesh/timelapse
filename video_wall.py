@@ -20,7 +20,6 @@ from collections import defaultdict
 import math
 
 # Import YoutubeDownloader
-sys.path.insert(0, str(Path(__file__).parent / 'YouTubeDownloader'))
 from youtube_downloader import YoutubeDownloader
 
 

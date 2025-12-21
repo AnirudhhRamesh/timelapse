@@ -19,7 +19,6 @@ import tempfile
 import shutil
 
 # Import YoutubeDownloader
-sys.path.insert(0, str(Path(__file__).parent / 'YouTubeDownloader'))
 from youtube_downloader import YoutubeDownloader
 
 
@@ -37,6 +36,8 @@ class TimelapseCapture:
         self.quality = quality
         self.running = False
         self.frames_captured = 0
+        self.camera_index = 0  # Default to camera 0
+        self.max_cameras = self._detect_available_cameras()  # Detect how many cameras are available
         
         # Set resolution based on quality
         self.resolutions = {
@@ -58,14 +59,44 @@ class TimelapseCapture:
         
         print(f"Output directory: {self.output_dir}")
         print(f"Images will be saved to: {self.images_dir}")
+    
+    def _detect_available_cameras(self, max_test=10):
+        """
+        Detect how many cameras are available by testing camera indices.
         
-    def setup_camera(self):
+        Args:
+            max_test: Maximum camera index to test (default: 10)
+        
+        Returns:
+            Number of available cameras found
+        """
+        available_count = 0
+        for i in range(max_test):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                available_count += 1
+                cap.release()
+            else:
+                # If we can't open this camera, assume no more cameras exist
+                # (cameras are usually numbered sequentially starting from 0)
+                break
+        return max(available_count, 1)  # At least 1 camera (default to camera 0)
+        
+    def setup_camera(self, camera_index=None):
         """Initialize the webcam."""
-        print("Initializing camera...")
-        self.cap = cv2.VideoCapture(0)  # 0 is usually the default camera
+        if camera_index is not None:
+            self.camera_index = camera_index
+        
+        print(f"Initializing camera {self.camera_index}...")
+        
+        # Release existing camera if it exists
+        if hasattr(self, 'cap') and self.cap is not None:
+            self.cap.release()
+        
+        self.cap = cv2.VideoCapture(self.camera_index)
         
         if not self.cap.isOpened():
-            raise RuntimeError("Could not open camera. Is the Logitech C925e connected?")
+            raise RuntimeError(f"Could not open camera {self.camera_index}. Is the camera connected?")
         
         # Set resolution
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
@@ -74,7 +105,7 @@ class TimelapseCapture:
         # Verify resolution
         actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"Camera initialized at {actual_width}x{actual_height}")
+        print(f"Camera {self.camera_index} initialized at {actual_width}x{actual_height}")
         
         # Warm up the camera
         for _ in range(5):
@@ -83,11 +114,15 @@ class TimelapseCapture:
     def preview_camera(self):
         """
         Show live camera preview window and wait for user confirmation.
+        User can cycle between cameras using '1' (left/previous) and '2' (right/next) keys.
         User presses 'q' in preview window to proceed, or 'ESC' to exit.
         """
         print("\n" + "="*60)
         print("Camera Preview - Adjust your view")
         print("="*60)
+        print(f"Found {self.max_cameras} camera(s) available")
+        print("Press '1' to cycle left (previous camera)")
+        print("Press '2' to cycle right (next camera)")
         print("Press 'q' in the preview window to start timelapse")
         print("Press 'ESC' in the preview window to exit\n")
         
@@ -103,8 +138,10 @@ class TimelapseCapture:
                     break
                 
                 # Add text overlay to preview
-                cv2.putText(frame, "Press 'q' to start or ESC to exit", 
+                cv2.putText(frame, f"Camera {self.camera_index}/{self.max_cameras-1} - Press '1' (left) or '2' (right) to switch", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame, "Press 'q' to start or ESC to exit", 
+                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
                 # Display the frame
                 cv2.imshow(window_name, frame)
@@ -113,11 +150,33 @@ class TimelapseCapture:
                 key = cv2.waitKey(30) & 0xFF
                 
                 if key == ord('q'):
-                    print("\nPreview confirmed - starting timelapse...")
+                    print(f"\nPreview confirmed - starting timelapse with camera {self.camera_index}...")
                     break
                 elif key == 27:  # ESC key
                     print("\nPreview cancelled")
                     return False
+                elif key == ord('1'):
+                    # Cycle left (decrement, wrap around)
+                    new_index = (self.camera_index - 1) % self.max_cameras
+                    if new_index != self.camera_index:
+                        print(f"\nCycling left to camera {new_index}...")
+                        try:
+                            self.setup_camera(new_index)
+                            print(f"Switched to camera {new_index}")
+                        except Exception as e:
+                            print(f"Failed to switch to camera {new_index}: {e}")
+                            print("Keeping current camera")
+                elif key == ord('2'):
+                    # Cycle right (increment, wrap around)
+                    new_index = (self.camera_index + 1) % self.max_cameras
+                    if new_index != self.camera_index:
+                        print(f"\nCycling right to camera {new_index}...")
+                        try:
+                            self.setup_camera(new_index)
+                            print(f"Switched to camera {new_index}")
+                        except Exception as e:
+                            print(f"Failed to switch to camera {new_index}: {e}")
+                            print("Keeping current camera")
                     
         except KeyboardInterrupt:
             print("\nPreview interrupted")
